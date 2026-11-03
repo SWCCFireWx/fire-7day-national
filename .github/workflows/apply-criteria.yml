@@ -1,8 +1,8 @@
 name: Apply GACC settings from website
 
 # The website's Criteria tab opens an issue titled "[criteria XX] ..." with that GACC's
-# settings. This checks who sent it (repository admins, or people on that GACC's editor
-# list), validates and saves the settings, re-checks that GACC's saved days, commits,
+# settings, or with confirmed by-hand trigger days. Confirmed days are accepted from anyone;
+# criteria changes only from repository admins (or that GACC's editor list). This validates and saves, re-checks that GACC's saved days, commits,
 # replies on the issue and closes it.
 
 on:
@@ -54,7 +54,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes."
           else
-            git commit -m "Update ${{ steps.apply.outputs.gacc }} settings from website (issue #$ISSUE)"
+            git commit -m "Update ${{ steps.apply.outputs.gacc }} from website (issue #$ISSUE)"
             git pull --rebase --quiet
             git push
           fi
