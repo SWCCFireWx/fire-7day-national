@@ -1,0 +1,74 @@
+name: Apply GACC settings from website
+
+# The website's Criteria tab opens an issue titled "[criteria XX] ..." with that GACC's
+# settings. This checks who sent it (repository admins, or people on that GACC's editor
+# list), validates and saves the settings, re-checks that GACC's saved days, commits,
+# replies on the issue and closes it.
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: archive
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: startsWith(github.event.issue.title, '[criteria')
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ISSUE: ${{ github.event.issue.number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check and save the settings
+        id: apply
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
+          ISSUE_ASSOC: ${{ github.event.issue.author_association }}
+        run: |
+          python scripts/apply_criteria.py | tee apply_out.txt
+          echo "gacc=$(grep '^GACC=' apply_out.txt | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+
+      - name: Re-check that GACC's saved days
+        id: rescore
+        continue-on-error: true
+        run: python scripts/verify_weather.py --rescore --days 0 --gacc "${{ steps.apply.outputs.gacc }}"
+
+      - name: Commit
+        run: |
+          git config user.name  "forecast-archiver"
+          git config user.email "actions@users.noreply.github.com"
+          git add config/ data/
+          if git diff --cached --quiet; then
+            echo "No changes."
+          else
+            git commit -m "Update ${{ steps.apply.outputs.gacc }} settings from website (issue #$ISSUE)"
+            git pull --rebase --quiet
+            git push
+          fi
+
+      - name: Reply and close
+        if: always()
+        run: |
+          [ -f criteria_result.md ] || echo "**Not applied.** Something went wrong; see the Actions tab for details." > criteria_result.md
+          if [ "${{ steps.apply.outcome }}" = "success" ]; then
+            if [ "${{ steps.rescore.outcome }}" = "success" ]; then
+              echo "- Saved days were re-checked with these settings." >> criteria_result.md
+            else
+              echo "- Settings saved, but re-checking past days failed. Run the archive workflow with **rescore** checked to retry." >> criteria_result.md
+            fi
+          fi
+          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file criteria_result.md
+          gh issue close "$ISSUE" --repo "$GITHUB_REPOSITORY"
