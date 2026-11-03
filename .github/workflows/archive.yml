@@ -1,0 +1,78 @@
+name: Archive 7-Day Fire Potential
+
+on:
+  schedule:
+    # Times are UTC. Runs at about 3 am Mountain time, year-round (before any GACC issues).
+    # A pull before 7 am Mountain saves the previous day's finished forecast.
+    #   09:05 UTC = 3:05 am MDT (summer) -> runs;  2:05 am MST (winter) -> skipped
+    #   10:05 UTC = 3:05 am MST (winter) -> runs;  4:05 am MDT (summer) -> already done
+    #   12:05 UTC = backup at 5-6 am, only saves if the earlier runs failed
+    - cron: "5 9 * * *"
+    - cron: "5 10 * * *"
+    - cron: "5 12 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Replace the archived forecast for this issue date (use if the product was re-issued)"
+        type: boolean
+        default: false
+      rescore:
+        description: "Re-check all saved days with each GACC's current criteria"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: archive
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Pull 7-day forecast (all GACCs)
+        id: forecast
+        continue-on-error: true
+        run: |
+          ARGS=""
+          if [ "${{ github.event_name }}" = "schedule" ]; then ARGS="--not-before-hour 3"; fi
+          if [ "${{ inputs.force }}" = "true" ]; then ARGS="$ARGS --force"; fi
+          python scripts/archive_forecast.py $ARGS
+
+      - name: Check observed weather against each GACC's criteria
+        id: weather
+        continue-on-error: true
+        run: |
+          if [ "${{ inputs.rescore }}" = "true" ]; then
+            python scripts/verify_weather.py --rescore
+          else
+            python scripts/verify_weather.py
+          fi
+
+      - name: Commit results
+        run: |
+          git config user.name  "forecast-archiver"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/ config/
+          if git diff --cached --quiet; then
+            echo "Nothing new to commit."
+          else
+            git commit -m "Archive $(TZ=America/Denver date +%F)"
+            git pull --rebase --quiet
+            git push
+          fi
+
+      - name: Flag any failed step
+        if: steps.forecast.outcome == 'failure' || steps.weather.outcome == 'failure'
+        run: |
+          echo "Forecast step: ${{ steps.forecast.outcome }}   Weather step: ${{ steps.weather.outcome }}"
+          exit 1
