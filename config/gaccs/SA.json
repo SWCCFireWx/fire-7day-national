@@ -1,0 +1,78 @@
+{
+  "_readme": "Settings for this GACC. Edit from the website's Criteria tab.",
+  "code": "SA",
+  "center": "SACC",
+  "name": "Southern Area",
+  "timezone": "America/Chicago",
+  "editors": [],
+  "criteria_sets": {
+    "Standard": {
+      "description": "Southern Area High Risk triggers as written in the 7-Day trigger criteria. The wording gives no numbers, so the automatic Wind and Burn Environment checks start from the Southwest thresholds.",
+      "stations_needed": {
+        "default": 2,
+        "small_psa_station_count": 3,
+        "small_psa_needed": 1
+      },
+      "triggers": [
+        {
+          "letter": "W",
+          "name": "Wind",
+          "color": "orange",
+          "method": "auto",
+          "description": "Critical wind speeds and low relative humidity resulting in an elevated chance for significant fires and the potential for significant fire growth on existing fires.",
+          "wind": {
+            "sustained_mph": 20,
+            "gust_mph": 35,
+            "gust_hours": 2
+          },
+          "rh_max": 15,
+          "temp_above_typical": null,
+          "erc_min": null,
+          "haines_min": null
+        },
+        {
+          "letter": "L",
+          "name": "Lightning",
+          "color": "red",
+          "method": "manual",
+          "description": "A greater than 20% chance of significant fires due to thunderstorms.",
+          "wind": null,
+          "rh_max": null,
+          "temp_above_typical": null,
+          "erc_min": null,
+          "haines_min": null
+        },
+        {
+          "letter": "B",
+          "name": "Burn Environment",
+          "color": "orange",
+          "method": "auto",
+          "description": "An elevated chance of significant fires and potential for large fire growth due to either hot temperatures, instability, and wind or a combination of these factors.",
+          "wind": null,
+          "rh_max": 15,
+          "temp_above_typical": 5,
+          "erc_min": null,
+          "haines_min": 5
+        }
+      ]
+    }
+  },
+  "schedule": [
+    {
+      "from": "2026-01-01",
+      "set": "Standard",
+      "note": "Starting criteria"
+    }
+  ],
+  "typical_max": {
+    "base_f_at_1000ft": 98,
+    "drop_per_1000ft": 3.5
+  },
+  "typical_peak_max_f": {},
+  "erc_fuel_model": "Y",
+  "afternoon_hours": {
+    "start": 10,
+    "end": 20
+  },
+  "dry_rh_context": 20
+}
