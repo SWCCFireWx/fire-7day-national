@@ -84,6 +84,7 @@ def default_config(code, gacc_field=""):
         "typical_max": {"base_f_at_1000ft": tmax, "drop_per_1000ft": 3.5},
         "typical_peak_max_f": {},
         "erc_fuel_model": "Y",
+        "fire_min_acres": 100,          # a fire growing this many acres in one day counts as a significant fire day
         "afternoon_hours": {"start": 10, "end": 20},
         "dry_rh_context": 20,
     }
