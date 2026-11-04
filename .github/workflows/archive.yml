@@ -31,6 +31,8 @@ concurrency:
 jobs:
   archive:
     runs-on: ubuntu-latest
+    env:
+      PYTHONUNBUFFERED: "1"   # show log lines as they happen
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -58,6 +60,11 @@ jobs:
             python scripts/verify_weather.py
           fi
 
+      - name: Update significant fires from NIFC (WFIGS)
+        id: fires
+        continue-on-error: true
+        run: python scripts/update_fires.py
+
       - name: Commit results
         run: |
           git config user.name  "forecast-archiver"
@@ -72,7 +79,7 @@ jobs:
           fi
 
       - name: Flag any failed step
-        if: steps.forecast.outcome == 'failure' || steps.weather.outcome == 'failure'
+        if: steps.forecast.outcome == 'failure' || steps.weather.outcome == 'failure' || steps.fires.outcome == 'failure'
         run: |
-          echo "Forecast step: ${{ steps.forecast.outcome }}   Weather step: ${{ steps.weather.outcome }}"
+          echo "Forecast step: ${{ steps.forecast.outcome }}   Weather step: ${{ steps.weather.outcome }}   Fires step: ${{ steps.fires.outcome }}"
           exit 1
