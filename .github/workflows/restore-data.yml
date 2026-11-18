@@ -1,0 +1,52 @@
+# One-click restore of the data and config folders from an earlier commit.
+# Actions -> "Restore data and config" -> Run workflow. The commit box is pre-filled with the
+# last commit before the folders were deleted on Nov 18, 2026 (8:25 am MT).
+# Everything else (index.html, scripts, workflows) is left as it is now.
+
+name: Restore data and config
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: "Restore data/ and config/ as they were at this commit"
+        required: true
+        default: "b9f9242d14d7e310847ddc0bcf5fd3e92b9b8363"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: archive          # waits for any archive run to finish first, so they never save at the same time
+  cancel-in-progress: false
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Put back data/ and config/
+        run: |
+          set -e
+          C="${{ github.event.inputs.commit }}"
+          git cat-file -e "$C^{commit}"
+          git checkout "$C" -- data config
+          echo "Files restored:"
+          git status --short | wc -l
+
+      - name: Save
+        run: |
+          git config user.name  "forecast-archiver"
+          git config user.email "actions@users.noreply.github.com"
+          git add data config
+          if git diff --cached --quiet; then
+            echo "Nothing to restore; data and config already match that commit."
+          else
+            git commit -m "Restore data and config from ${{ github.event.inputs.commit }}"
+            git pull --rebase --quiet || true
+            git push
+          fi
