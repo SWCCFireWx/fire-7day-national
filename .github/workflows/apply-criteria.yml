@@ -22,6 +22,7 @@ jobs:
     if: startsWith(github.event.issue.title, '[criteria')
     runs-on: ubuntu-latest
     env:
+      PYTHONUNBUFFERED: "1"   # show log lines as they happen
       GH_TOKEN: ${{ github.token }}
       ISSUE: ${{ github.event.issue.number }}
     steps:
