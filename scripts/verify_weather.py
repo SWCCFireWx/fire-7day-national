@@ -33,6 +33,7 @@ import math
 import os
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections import defaultdict
@@ -74,6 +75,15 @@ def http(url, body=None, retries=3, timeout=120):
                 "Content-Type": "application/json", "Accept": "application/json, */*"})
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 return r.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            if 400 <= e.code < 500:       # the request itself is wrong; retrying won't help
+                try:
+                    detail = e.read().decode("utf-8", "replace")[:300]
+                except Exception:
+                    detail = ""
+                raise RuntimeError(f"{url[:120]} failed: HTTP {e.code} {detail}".strip())
+            last = e
+            time.sleep(4 * (i + 1))
         except Exception as e:
             last = e
             time.sleep(4 * (i + 1))
@@ -89,9 +99,10 @@ def mock_http(url, body):
         if "stationMetaData" in t:
             st = t.split('stateId: "')[1][:2]
             name = f"fems_stations_{st}.json"
-        elif "nfdrsObs" in t:
-            start = t.split('startDateRange: "')[1][:10]
-            name = f"fems_nfdr_{start}.json"
+        elif "nfdrMinMax" in t or "nfdrsObs" in t:
+            v = body.get("variables") or {}
+            start = v.get("startDate") or v.get("startDateRange")
+            name = f"fems_{'nfdrmm' if 'nfdrMinMax' in t else 'nfdr'}_{start}.json"
         else:
             start = t.split('startDateTimeRange: "')[1][:13]
             name = f"fems_obs_{start}.json"
@@ -108,8 +119,11 @@ def mock_http(url, body):
         return fh.read()
 
 
-def gql(query):
-    payload = json.loads(http(FEMS_GQL, {"query": query}))
+def gql(query, variables=None):
+    body = {"query": query}
+    if variables:
+        body["variables"] = variables
+    payload = json.loads(http(FEMS_GQL, body))
     if payload.get("errors"):
         raise RuntimeError(f"FEMS error: {str(payload['errors'])[:300]}")
     return payload["data"]
@@ -311,10 +325,11 @@ def local_day_utc(d, tz):
     return s, s + timedelta(days=1) - timedelta(seconds=1)
 
 
-def paged(query_fn, key):
+def paged(query_fn, key, variables=None):
     out, page = [], 0
     while True:
-        d = gql(query_fn(page))[key]
+        v = dict(variables, page=page) if variables is not None else None
+        d = gql(query_fn(page), v)[key]
         out.extend(d.get("data") or [])
         page += 1
         if page >= int((d.get("_metadata") or {}).get("page_count") or 1):
@@ -341,22 +356,72 @@ def fetch_raws_obs(d, tz, ids):
     return dict(out)
 
 
+# FEMS fire danger. The daily max query (nfdrMinMax) is tried first, then the hourly one (nfdrsObs).
+# dateTimeFormat is a GraphQL enum, so values go in as variables, not typed into the query text.
+NFDR_MINMAX = """query NfdrMinMax($startDate: Date!, $endDate: Date, $stationIds: String, $fuelModels: String,
+  $hasHistoricData: TriState, $page: Int, $perPage: Int) {
+  nfdrMinMax(startDate: $startDate, endDate: $endDate, stationIds: $stationIds, fuelModels: $fuelModels,
+    hasHistoricData: $hasHistoricData, page: $page, per_page: $perPage) {
+    _metadata { page page_count total_count }
+    data { station_id summary_date nfdr_type energy_release_component_max burning_index_max } } }"""
+NFDR_HOURLY = """query NfdrsObs($fuelModels: String!, $startDateRange: Date, $endDateRange: Date, $stationIds: String,
+  $hasHistoricData: TriState, $dateTimeFormat: DateTimeFormat, $page: Int, $perPage: Int) {
+  nfdrsObs(fuelModels: $fuelModels, startDateRange: $startDateRange, endDateRange: $endDateRange,
+    stationIds: $stationIds, hasHistoricData: $hasHistoricData, dateTimeFormat: $dateTimeFormat,
+    page: $page, per_page: $perPage) {
+    _metadata { page page_count total_count }
+    data { station_id observation_time_lst nfdr_type energy_release_component burning_index } } }"""
+_nfdr = {"mode": None, "off": None}     # which query works; why ERC/BI is off for this run
+
+
+def _observed(r):
+    t = str(r.get("nfdr_type") or "O").strip().upper()
+    return not t.startswith("F")         # skip forecast rows
+
+
+def _nfdr_rows(mode, d, chunk, fuel_model):
+    if mode == "minmax":
+        v = {"startDate": d.isoformat(), "endDate": d.isoformat(), "stationIds": chunk,
+             "fuelModels": fuel_model, "hasHistoricData": "ALL", "perPage": 5000}
+        rows = paged(lambda p: NFDR_MINMAX, "nfdrMinMax", v)
+        return [(r.get("station_id"), r.get("energy_release_component_max"), r.get("burning_index_max"))
+                for r in rows if _observed(r) and str(r.get("summary_date") or d.isoformat())[:10] == d.isoformat()]
+    v = {"fuelModels": fuel_model, "startDateRange": d.isoformat(), "endDateRange": d.isoformat(),
+         "stationIds": chunk, "hasHistoricData": "ALL", "dateTimeFormat": "LocalStationTime", "perPage": 5000}
+    rows = paged(lambda p: NFDR_HOURLY, "nfdrsObs", v)
+    return [(r.get("station_id"), r.get("energy_release_component"), r.get("burning_index"))
+            for r in rows if _observed(r) and str(r.get("observation_time_lst") or d.isoformat())[:10] == d.isoformat()]
+
+
 def fetch_erc(d, ids, fuel_model):
-    """Daily max ERC and BI per RAWS from the hourly NFDRS observations: ({id: erc}, {id: bi})."""
+    """Daily max ERC and BI per RAWS: ({id: erc}, {id: bi})."""
+    if _nfdr["off"]:
+        raise RuntimeError(_nfdr["off"])
     out, bi = {}, {}
     for i in range(0, len(ids), 60):
         chunk = ",".join(str(x) for x in ids[i:i + 60])
-        rows = paged(lambda p: f'''query {{ nfdrsObs(stationIds: "{chunk}", fuelModels: "{fuel_model}", nfdrType: "O",
-            startDateRange: "{d.isoformat()}", endDateRange: "{d.isoformat()}", startHour: 0, endHour: 24,
-            dateTimeFormat: "LocalStationTime", page: {p}, per_page: 5000) {{
-            _metadata {{ page page_count total_count }}
-            data {{ station_id nfdr_date energy_release_component burning_index }} }} }}''', "nfdrsObs")
-        for r in rows:
-            sid = str(r.get("station_id"))
-            v = num(r.get("energy_release_component"))
+        if _nfdr["mode"]:
+            rows = _nfdr_rows(_nfdr["mode"], d, chunk, fuel_model)
+        else:
+            errs = []
+            for mode in ("minmax", "hourly"):
+                try:
+                    rows = _nfdr_rows(mode, d, chunk, fuel_model)
+                    _nfdr["mode"] = mode
+                    print(f"FEMS ERC/BI: using the {'daily max' if mode == 'minmax' else 'hourly'} query")
+                    break
+                except Exception as e:
+                    errs.append(f"{mode}: {e}")
+            else:
+                _nfdr["off"] = "FEMS ERC/BI unavailable this run (" + " | ".join(errs)[:400] + ")"
+                print(_nfdr["off"])
+                raise RuntimeError(_nfdr["off"])
+        for sid, e_, b_ in rows:
+            sid = str(sid)
+            v = num(e_)
             if v is not None and 0 <= v < 200:
                 out[sid] = max(out.get(sid, v), v)
-            b = num(r.get("burning_index"))
+            b = num(b_)
             if b is not None and 0 <= b < 500:
                 bi[sid] = max(bi.get(sid, b), b)
     return out, bi
@@ -563,6 +628,11 @@ def main():
         else:
             todo = [(today - timedelta(days=k)).isoformat() for k in range(args.days, 0, -1)]
             todo = [d for d in todo if d not in results]
+            # days saved while FEMS ERC/BI was down: try them again for up to 30 days
+            no_erc = {dt for dt, rows in results.items() if not any(x.get("erc") or x.get("bi") for x in rows)}
+            retry = {r["date"] for r in existing if ("erc" in (r.get("sources_missing") or "").split() or r["date"] in no_erc)
+                     and 0 < (today - date.fromisoformat(r["date"])).days <= 30}
+            todo = sorted(set(todo) | retry)
             if not os.path.exists(st_path) or (existing and ("haines" in existing[0] or "asos_reporting" not in existing[0])):
                 # first run with station results, results made with the old Haines check, or before ASOS/BI: redo every saved day
                 todo = sorted(set(todo) | {f[:-8] for f in os.listdir(raw_dir) if f.endswith(".json.gz")})
@@ -582,12 +652,17 @@ def main():
                         changed = True
                     except Exception as e:
                         print(f"{g} {ds} ASOS/AWOS backfill: {e}")
-                if ids and "bi" not in saved and (today - d).days <= 30:   # BI added later; FEMS keeps recent days
+                no_nfdr = "bi" not in saved or "erc" in saved.get("missing", []) or not saved.get("erc")
+                if ids and no_nfdr and (today - d).days <= 30 and not _nfdr["off"]:   # ERC/BI missing; FEMS keeps recent days
                     try:
-                        saved["erc"], saved["bi"] = fetch_erc(d, ids, cfg.get("erc_fuel_model", "Y"))
-                        changed = True
+                        erc, bi = fetch_erc(d, ids, cfg.get("erc_fuel_model", "Y"))
+                        if erc or bi or "bi" not in saved:
+                            saved["erc"], saved["bi"] = erc, bi
+                            saved["missing"] = [m for m in saved.get("missing", []) if m != "erc"]
+                            changed = True
                     except Exception as e:
-                        print(f"{g} {ds} BI backfill: {e}")
+                        if not _nfdr["off"]:
+                            print(f"{g} {ds} ERC/BI backfill: {e}")
                 if changed:
                     with gzip.open(rp, "wt") as fh:
                         json.dump(saved, fh, separators=(",", ":"))
@@ -614,7 +689,8 @@ def main():
                 try:
                     saved["erc"], saved["bi"] = fetch_erc(d, ids, cfg.get("erc_fuel_model", "Y"))
                 except Exception as e:
-                    print(f"{g} {ds} ERC/BI: {e}")
+                    if _nfdr["off"] != str(e):
+                        print(f"{g} {ds} ERC/BI: {e}")
                     saved["erc"], saved["bi"] = {}, {}
                     missing.append("erc")
                 saved["missing"] = missing
