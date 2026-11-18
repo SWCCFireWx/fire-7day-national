@@ -1,0 +1,64 @@
+{
+ "gaccs": [
+  {
+   "code": "NW",
+   "name": "Northwest",
+   "center": "NWCC",
+   "psas": []
+  },
+  {
+   "code": "NC",
+   "name": "Northern California",
+   "center": "ONCC",
+   "psas": []
+  },
+  {
+   "code": "SC",
+   "name": "Southern California",
+   "center": "OSCC",
+   "psas": []
+  },
+  {
+   "code": "GB",
+   "name": "Great Basin",
+   "center": "GBCC",
+   "psas": []
+  },
+  {
+   "code": "NR",
+   "name": "Northern Rockies",
+   "center": "NRCC",
+   "psas": []
+  },
+  {
+   "code": "RM",
+   "name": "Rocky Mountain",
+   "center": "RMCC",
+   "psas": []
+  },
+  {
+   "code": "SW",
+   "name": "Southwest",
+   "center": "SWCC",
+   "psas": []
+  },
+  {
+   "code": "SA",
+   "name": "Southern Area",
+   "center": "SACC",
+   "psas": []
+  },
+  {
+   "code": "EA",
+   "name": "Eastern Area",
+   "center": "EACC",
+   "psas": []
+  },
+  {
+   "code": "AK",
+   "name": "Alaska",
+   "center": "AICC",
+   "psas": []
+  }
+ ]
+}
