@@ -67,8 +67,6 @@
   },
   "typical_peak_max_f": {},
   "erc_fuel_model": "Y",
-  "fire_min_acres": 100,
-  "lightning_auto_starts": 5,
   "afternoon_hours": {
     "start": 10,
     "end": 20
